@@ -5,11 +5,13 @@ import com.apisentinel.exception.UpstreamTimeoutException;
 import com.apisentinel.exception.UpstreamUnavailableException;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 
@@ -23,9 +25,28 @@ public class ResilienceService {
         this.circuitBreakerRegistry = circuitBreakerRegistry;
     }
 
+    private CircuitBreaker getOrCreateCircuitBreaker(String instanceName) {
+        try {
+            return circuitBreakerRegistry.circuitBreaker(instanceName, "upstreamGateway");
+        } catch (Exception ignored) {
+            try {
+                return circuitBreakerRegistry.circuitBreaker(instanceName);
+            } catch (Exception e) {
+                CircuitBreakerConfig config = CircuitBreakerConfig.custom()
+                        .slidingWindowSize(10)
+                        .minimumNumberOfCalls(5)
+                        .failureRateThreshold(50.0f)
+                        .waitDurationInOpenState(Duration.ofSeconds(10))
+                        .permittedNumberOfCallsInHalfOpenState(3)
+                        .build();
+                return circuitBreakerRegistry.circuitBreaker(instanceName, config);
+            }
+        }
+    }
+
     public <T> T executeWithResilience(UUID apiId, Callable<T> callable) throws Exception {
         String instanceName = "api-" + apiId;
-        CircuitBreaker circuitBreaker = circuitBreakerRegistry.circuitBreaker(instanceName, "upstreamGateway");
+        CircuitBreaker circuitBreaker = getOrCreateCircuitBreaker(instanceName);
 
         try {
             return circuitBreaker.executeCallable(callable);
@@ -42,6 +63,6 @@ public class ResilienceService {
 
     public CircuitBreaker.State getCircuitBreakerState(UUID apiId) {
         String instanceName = "api-" + apiId;
-        return circuitBreakerRegistry.circuitBreaker(instanceName, "upstreamGateway").getState();
+        return getOrCreateCircuitBreaker(instanceName).getState();
     }
 }
